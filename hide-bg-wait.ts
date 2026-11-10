@@ -16,6 +16,42 @@ function isWaitTool(parameters: unknown): boolean {
 	return properties !== undefined && "nonBlocking" in properties && "stopOnAttention" in properties;
 }
 
+/** Drop a per-call model override; returns the value that was removed, if any. */
+function stripModel(holder: unknown): string | undefined {
+	if (typeof holder !== "object" || holder === null) return undefined;
+	const record = holder as Record<string, unknown>;
+	if (!("model" in record)) return undefined;
+	const value = record.model;
+	delete record.model;
+	return typeof value === "string" && value.length > 0 ? value : "model";
+}
+
+/**
+ * A per-call model beats the model fixed in the agent definition, and pi-subagents aborts the whole
+ * launch when that id is not in the registry. Arguments are not re-validated after a tool_call
+ * handler, so dropping the field here is the one place the model cannot talk its way past.
+ */
+function stripModelOverrides(input: Record<string, unknown>): string[] {
+	const stripped: string[] = [];
+	const strip = (holder: unknown) => {
+		const value = stripModel(holder);
+		if (value !== undefined) stripped.push(value);
+	};
+	strip(input);
+	strip(input.options);
+	for (const key of ["tasks", "chain"]) {
+		const list = input[key];
+		if (!Array.isArray(list)) continue;
+		for (const step of list) {
+			strip(step);
+			if (typeof step !== "object" || step === null) continue;
+			const parallel = (step as Record<string, unknown>).parallel;
+			if (Array.isArray(parallel)) for (const group of parallel) strip(group);
+		}
+	}
+	return stripped;
+}
+
 // `subagent` names the single installed agent; keep that line in step with ~/.pi/agent/agents.
 const DESCRIPTIONS = {
 	subagent: [
@@ -42,6 +78,8 @@ const DESCRIPTIONS = {
  * descriptions they carry, so do not restore the package wording.
  */
 export default function (pi: ExtensionAPI) {
+	let notedModelOverride = false;
+
 	function enableSubagent(ctx: ExtensionContext) {
 		const registered = new Set(pi.getAllTools().map((tool) => tool.name));
 		if (!registered.has(SUBAGENT)) {
@@ -96,6 +134,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_start", () => { ensureActive(); });
 	pi.on("session_tree", () => { ensureActive(); });
+	pi.on("tool_call", (event, ctx) => {
+		if (event.toolName !== SUBAGENT) return;
+		const stripped = stripModelOverrides(event.input as Record<string, unknown>);
+		if (stripped.length === 0 || notedModelOverride) return;
+		notedModelOverride = true;
+		ctx.ui.notify(`已忽略子代理的模型覆盖：${stripped.join("、")}。模型由 agent 定义固定。`, "info");
+	});
 	pi.on("before_agent_start", (event) => {
 		// Explicit exclusions may prevent activation; do not bypass them in the prompt.
 		if (!ensureActive()) return;
