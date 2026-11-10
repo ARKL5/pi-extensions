@@ -19,7 +19,7 @@ function isWaitTool(parameters: unknown): boolean {
 // `subagent` names the single installed agent; keep that line in step with ~/.pi/agent/agents.
 const DESCRIPTIONS = {
 	subagent: [
-		"Delegate when requested by the user or authorized by applicable AGENTS.md or skill instructions. One agent exists: general. Use agent+task for one child, tasks for parallel work, or chain for ordered steps; choose exactly one.",
+		"Delegate when requested by the user or authorized by applicable AGENTS.md or skill instructions. One agent exists: general. Use agent+task for one child, tasks for parallel work, or chain for ordered steps; choose exactly one. Never pass model: the agent's model and thinking level are fixed in configuration, and an unknown id aborts the launch.",
 		"Use async:true by default. After launch, continue independent work or return control. Completion wakes this session; consume the result before a step that depends on it. Use async:false when explicitly requested or required by the applicable workflow.",
 		"A child blocked on a decision or interview also wakes this session with the question. Answer that turn with subagent_supervisor.",
 	].join("\n\n"),
