@@ -5,15 +5,23 @@ const HIDER = "bg_wait_hider";
 const SUBAGENT = "subagent";
 const LOADER = "subagents_enable";
 const SUPERVISOR = "subagent_supervisor";
-const HIDDEN = ["bg_wait", LOADER, HIDER] as const;
+const WAIT = "bg_wait";
+const HIDDEN = [LOADER, HIDER] as const;
 
+// pi-subagents' wait tool declares exactly these two parameters; another extension's bg_wait does not.
+// It is matched by shape as well as by name, because config.waitTool.name can rename it, and a
+// literal name alone would then leave a blocking wait tool in the request without a warning.
+function isWaitTool(parameters: unknown): boolean {
+	const properties = (parameters as { properties?: Record<string, unknown> } | undefined)?.properties;
+	return properties !== undefined && "nonBlocking" in properties && "stopOnAttention" in properties;
+}
+
+// `subagent` names the single installed agent; keep that line in step with ~/.pi/agent/agents.
 const DESCRIPTIONS = {
 	subagent: [
-		"Delegate when requested by the user or authorized by applicable AGENTS.md or skill instructions. Use agent+task for one child, tasks for parallel work, or chain for ordered steps; choose exactly one.",
-		"Before launching, select an available agent with {action:\"list\",capabilities:true}. list and status on this tool describe agents and runs.",
+		"Delegate when requested by the user or authorized by applicable AGENTS.md or skill instructions. One agent exists: general. Use agent+task for one child, tasks for parallel work, or chain for ordered steps; choose exactly one.",
 		"Use async:true by default. After launch, continue independent work or return control. Completion wakes this session; consume the result before a step that depends on it. Use async:false when explicitly requested or required by the applicable workflow.",
 		"A child blocked on a decision or interview also wakes this session with the question. Answer that turn with subagent_supervisor.",
-		"Before external CLI execution or run recovery, read {action:\"guide\",topic:\"tool-reference\"}.",
 	].join("\n\n"),
 	subagent_supervisor: [
 		"Answer a child blocked on a decision or interview. The question arrives as its own turn and includes the reply call. Send that call: {action:\"reply\", replyTo:\"<request id>\", message:\"...\"}.",
@@ -23,14 +31,15 @@ const DESCRIPTIONS = {
 };
 
 /**
- * pi-subagents and pi-web-access ship large tool declarations. Subagents are rare, so their
- * schemas stay out of ordinary requests until /subagent-on. That command adds subagent and
- * subagent_supervisor together; the next request pays for both once.
- * subagents_enable and bg_wait stay registered but omitted. The model must not turn delegation
- * on itself, and must not see a wait tool. The first registration of those names wins.
+ * pi-subagents ships a large `subagent` declaration and pi-web-access ships longer text for
+ * web_search. Subagents are rare, so `subagent` and `subagent_supervisor` stay out of ordinary
+ * requests until /subagent-on; that command adds both and the next request pays for them once.
+ * `subagents_enable` and the wait tool stay registered but omitted: the model must not turn
+ * delegation on itself, and must not park on a wait tool when completion already wakes this
+ * session. The first registration of those names wins.
  * Decide from this loadout. getActiveTools() is still the previous set while prepareLoadout runs.
- * The package description repeats the parameter text. These replacements are the manual cut of that
- * redundancy; do not restore the package wording. Parameter schemas stay with the packages.
+ * Parameter schemas stay with the packages; these replacements are the manual cut of the
+ * descriptions they carry, so do not restore the package wording.
  */
 export default function (pi: ExtensionAPI) {
 	function enableSubagent(ctx: ExtensionContext) {
@@ -67,7 +76,12 @@ export default function (pi: ExtensionAPI) {
 		},
 		prepareLoadout(loadout: ToolLoadout) {
 			const declared = new Set(loadout.declared.map((tool) => tool.name));
-			const hidden: string[] = [...HIDDEN];
+			const hidden = [
+				...HIDDEN,
+				...loadout.registered
+					.filter((tool) => tool.name === WAIT || isWaitTool(tool.parameters))
+					.map((tool) => tool.name),
+			];
 			if (!declared.has(SUBAGENT)) hidden.push(SUPERVISOR);
 			return { hiddenDeclarations: hidden, descriptions: DESCRIPTIONS };
 		},
@@ -75,9 +89,8 @@ export default function (pi: ExtensionAPI) {
 
 	function ensureActive(): boolean {
 		const active = pi.getActiveTools();
-		if (!active.includes(HIDER)) {
-			pi.setActiveTools([...active, HIDER]);
-		}
+		if (active.includes(HIDER)) return true;
+		pi.setActiveTools([...active, HIDER]);
 		return pi.getActiveTools().includes(HIDER);
 	}
 
